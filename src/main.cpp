@@ -1,4 +1,7 @@
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/sysmem.h>
+#include <psp2/display.h>
+#include <psp2/ctrl.h>
 #include <sstream>
 #include <vector>
 #include <string>
@@ -124,15 +127,75 @@ void render(const std::vector<Sphere> &spheres, const std::vector<Light> &lights
     const float fov      = 3.14f/3.;
     std::vector<Vec3f> framebuffer(width*height);
 
-    #pragma omp parallel for
-    for (size_t j = 0; j<height; j++) { // actual rendering loop
-        for (size_t i = 0; i<width; i++) {
-            float dir_x =  (i + 0.5) -  width/2.;
-            float dir_y = -(j + 0.5) + height/2.;    // this flips the image at the same time
-            float dir_z = -height/(2.*tan(fov/2.));
-            framebuffer[i+j*width] = cast_ray(Vec3f(0,0,0), Vec3f(dir_x, dir_y, dir_z).normalize(), spheres, lights);
-        }
+    void* base;
+	SceUID memblock = sceKernelAllocMemBlock("camera", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 256 * 2048 * 5, NULL);
+	sceKernelGetMemBlockBase(memblock, &base);
+
+    srand(time(0));
+
+	SceDisplayFrameBuf dbuf = { sizeof(SceDisplayFrameBuf), base, DISPLAY_WIDTH, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT};
+
+    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+	SceCtrlData ctrl_peek;SceCtrlData ctrl_press;
+	// while (1)
+	// {
+	// 	uint32_t* ptr = (uint32_t*)base;
+	// 	for (int i = 0; i < 640 * 368; i++)
+	// 	{
+	// 		*(ptr + i) = rand() % (0xffffff + 0x1);
+	// 	}
+	// 	sceDisplaySetFrameBuf(&dbuf, SCE_DISPLAY_SETBUF_NEXTFRAME);
+
+	// }
+    uint32_t* ptr = (uint32_t*)base;
+    Vec3f Cam(0,0,0);
+    //for (size_t j = 0; j < height; j++) { // actual rendering loop
+        //for (size_t i = 0; i < width; i++) {
+            int i, j;
+            while(1) {
+                ctrl_press = ctrl_peek;
+			    sceCtrlPeekBufferPositive(0, &ctrl_peek, 1);
+			    ctrl_press.buttons = ctrl_peek.buttons & ~ctrl_press.buttons;
+
+                if(ctrl_press.buttons & SCE_CTRL_TRIANGLE)
+                {
+                    for (int k = 0; k < height * width; k++)
+                    {
+                        *(ptr + k) = 0;
+                    }
+
+                    Cam.x++;
+                    Cam.y++;
+                    Cam.z++;
+                    sceDisplaySetFrameBuf(&dbuf, SCE_DISPLAY_SETBUF_NEXTFRAME);
+                    continue;
+                }
+
+                j = rand() % height;
+                i = rand() % width;
+                float dir_x =  (i + 0.5) -  width/2.;
+                float dir_y = -(j + 0.5) + height/2.;    // this flips the image at the same time
+                float dir_z = -height/(2.*tan(fov/2.));
+                framebuffer[i+j*width] = cast_ray(Cam, Vec3f(dir_x, dir_y, dir_z).normalize(), spheres, lights);
+            
+                uint32_t ray = 0;
+                uint32_t red = (uint32_t)(255 * std::max(0.0f, std::min(1.f, framebuffer[i+j*width].z)));
+                uint32_t green = (uint32_t)(255 * std::max(0.0f, std::min(1.f, framebuffer[i+j*width].y)));
+                uint32_t blue = (uint32_t)(255 * std::max(0.0f, std::min(1.f, framebuffer[i+j*width].x)));
+                ray = (green << 8) + (red << 16) + blue;
+                *(ptr + i+j*width) = ray;
+                sceDisplaySetFrameBuf(&dbuf, SCE_DISPLAY_SETBUF_NEXTFRAME);
+            }
+        //}
+    //}
+
+    while(1)
+    {
+        sceDisplaySetFrameBuf(&dbuf, SCE_DISPLAY_SETBUF_NEXTFRAME);
     }
+
+	sceKernelFreeMemBlock(memblock);
+	sceKernelExitProcess(0);
 
     // std::ofstream ofs; // save the framebuffer to file
     // ofs.open("./out.ppm",std::ios::binary);
@@ -150,16 +213,16 @@ void render(const std::vector<Sphere> &spheres, const std::vector<Light> &lights
 
 int main(int argc, char *argv[]) {
 
-	Material      ivory(1.0, Vec4f(0.6,  0.3, 0.1, 0.0), Vec3f(0.4, 0.4, 0.3),   50.);
+    Material      ivory(1.0, Vec4f(0.6,  0.3, 0.1, 0.0), Vec3f(0.4, 0.4, 0.3),   50.);
     Material      glass(1.5, Vec4f(0.0,  0.5, 0.1, 0.8), Vec3f(0.6, 0.7, 0.8),  125.);
     Material red_rubber(1.0, Vec4f(0.9,  0.1, 0.0, 0.0), Vec3f(0.3, 0.1, 0.1),   10.);
     Material     mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425.);
 
     std::vector<Sphere> spheres;
-    spheres.push_back(Sphere(Vec3f(-3,    5,   -16), 1,      ivory));
-    spheres.push_back(Sphere(Vec3f(-1.0, -1.5, -12), 3,      glass));
+    spheres.push_back(Sphere(Vec3f(-3,    0,   -16), 2,      ivory));
+    spheres.push_back(Sphere(Vec3f(-1.0, -1.5, -12), 2,      glass));
     spheres.push_back(Sphere(Vec3f( 1.5, -0.5, -18), 3, red_rubber));
-    spheres.push_back(Sphere(Vec3f( 7,    5,   -18), 8,     mirror));
+    spheres.push_back(Sphere(Vec3f( 7,    5,   -18), 4,     mirror));
 
     std::vector<Light>  lights;
     lights.push_back(Light(Vec3f(-20, 20,  20), 1.5));
@@ -167,6 +230,8 @@ int main(int argc, char *argv[]) {
     lights.push_back(Light(Vec3f( 30, 20,  30), 1.7));
 
     render(spheres, lights);
+
+    while(1);
 
 	sceKernelExitProcess(0);
     return 0;
